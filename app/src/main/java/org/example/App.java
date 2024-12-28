@@ -5,11 +5,45 @@ import org.lwjgl.glfw.*;
 import org.lwjgl.opengl.*;
 import org.lwjgl.system.*;
 
+import java.io.IOException;
+import java.io.InputStream;
 import java.nio.*;
+import java.nio.charset.StandardCharsets;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 
 import static org.lwjgl.glfw.Callbacks.*;
 import static org.lwjgl.glfw.GLFW.*;
 import static org.lwjgl.opengl.GL11.*;
+import static org.lwjgl.opengl.GL15.GL_ARRAY_BUFFER;
+import static org.lwjgl.opengl.GL15.GL_STATIC_DRAW;
+import static org.lwjgl.opengl.GL15.glBindBuffer;
+import static org.lwjgl.opengl.GL15.glBufferData;
+import static org.lwjgl.opengl.GL15.glDeleteBuffers;
+import static org.lwjgl.opengl.GL15.glGenBuffers;
+import static org.lwjgl.opengl.GL20.GL_COMPILE_STATUS;
+import static org.lwjgl.opengl.GL20.GL_FRAGMENT_SHADER;
+import static org.lwjgl.opengl.GL20.GL_LINK_STATUS;
+import static org.lwjgl.opengl.GL20.GL_VERTEX_SHADER;
+import static org.lwjgl.opengl.GL20.glAttachShader;
+import static org.lwjgl.opengl.GL20.glCompileShader;
+import static org.lwjgl.opengl.GL20.glCreateProgram;
+import static org.lwjgl.opengl.GL20.glCreateShader;
+import static org.lwjgl.opengl.GL20.glDeleteProgram;
+import static org.lwjgl.opengl.GL20.glDeleteShader;
+import static org.lwjgl.opengl.GL20.glEnableVertexAttribArray;
+import static org.lwjgl.opengl.GL20.glGetProgramInfoLog;
+import static org.lwjgl.opengl.GL20.glGetProgrami;
+import static org.lwjgl.opengl.GL20.glGetShaderInfoLog;
+import static org.lwjgl.opengl.GL20.glGetShaderi;
+import static org.lwjgl.opengl.GL20.glLinkProgram;
+import static org.lwjgl.opengl.GL20.glShaderSource;
+import static org.lwjgl.opengl.GL20.glUseProgram;
+import static org.lwjgl.opengl.GL20.glVertexAttribPointer;
+import static org.lwjgl.opengl.GL30.glBindVertexArray;
+import static org.lwjgl.opengl.GL30.glDeleteVertexArrays;
+import static org.lwjgl.opengl.GL30.glGenVertexArrays;
 import static org.lwjgl.system.MemoryStack.*;
 import static org.lwjgl.system.MemoryUtil.*;
 
@@ -49,7 +83,7 @@ public class App {
         glfwWindowHint(GLFW_DECORATED, GLFW_TRUE);
 
         // Create the window
-        window = glfwCreateWindow(300, 300, "Hello World!", NULL, NULL);
+        window = glfwCreateWindow(1280, 720, "Ball sim", NULL, NULL);
         if (window == NULL)
             throw new RuntimeException("Failed to create the GLFW window");
 
@@ -67,22 +101,12 @@ public class App {
 
             // Get the window size passed to glfwCreateWindow
             glfwGetWindowSize(window, pWidth, pHeight);
-
-            // Get the resolution of the primary monitor
-            // GLFWVidMode vidmode = glfwGetVideoMode(glfwGetPrimaryMonitor());
-
-            // // Center the window
-            // glfwSetWindowPos(
-            // window,
-            // (vidmode.width() - pWidth.get(0)) / 2,
-            // (vidmode.height() - pHeight.get(0)) / 2);
         } // the stack frame is popped automatically
 
         // Make the OpenGL context current
         glfwMakeContextCurrent(window);
         // Enable v-sync
         glfwSwapInterval(1);
-
         // Make the window visible
         glfwShowWindow(window);
     }
@@ -95,20 +119,102 @@ public class App {
         // bindings available for use.
         GL.createCapabilities();
 
-        // Set the clear color
-        // glClearColor(1.0f, 0.0f, 0.0f, 0.0f);
+        // Create shader program
+        int shaderProgram = 0;
+
+        try {
+            shaderProgram = createShaderProgram();
+        } catch (IOException e) {
+            System.out.println("Oops Shader doesn't work...");
+            return;
+        }
+
+        // Vertex data
+        float[] vertices = {
+                -0.5f, -0.5f, 0.0f, // Bottom-left
+                0.5f, -0.5f, 0.0f, // Bottom-right
+                0.0f, 0.5f, 0.0f // Top-center
+        };
+
+        // Create a VAO and VBO
+        int vao = glGenVertexArrays();
+        int vbo = glGenBuffers();
+
+        glBindVertexArray(vao);
+        glBindBuffer(GL_ARRAY_BUFFER, vbo);
+
+        FloatBuffer vertexBuffer = MemoryUtil.memAllocFloat(vertices.length).put(vertices).flip();
+        glBufferData(GL_ARRAY_BUFFER, vertexBuffer, GL_STATIC_DRAW);
+
+        // Define vertex attributes
+        glVertexAttribPointer(0, 3, GL_FLOAT, false, 3 * Float.BYTES, 0);
+        glEnableVertexAttribArray(0);
+
+        // Unbind the VBO and VAO
+        glBindBuffer(GL_ARRAY_BUFFER, 0);
+        glBindVertexArray(0);
+
+        // Free the vertex buffer
+        MemoryUtil.memFree(vertexBuffer);
 
         // Run the rendering loop until the user has attempted to close
         // the window or has pressed the ESCAPE key.
         while (!glfwWindowShouldClose(window)) {
             glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT); // clear the framebuffer
 
-            glfwSwapBuffers(window); // swap the color buffers
+            glUseProgram(shaderProgram);
+            glBindVertexArray(vao);
+            glDrawArrays(GL_TRIANGLES, 0, 3);
 
-            // Poll for window events. The key callback above will only be
-            // invoked during this call.
+            glfwSwapBuffers(window); // swap the color buffers
             glfwPollEvents();
         }
+
+        glDeleteVertexArrays(vao);
+        glDeleteBuffers(vbo);
+        glDeleteProgram(shaderProgram);
+    }
+
+    private int createShaderProgram() throws IOException {
+        // Load and compile shaders
+        int vertexShader = loadShader("/shaders/vertex_shader.glsl", GL_VERTEX_SHADER);
+        int fragmentShader = loadShader("/shaders/fragment_shader.glsl", GL_FRAGMENT_SHADER);
+
+        // Link the shaders into a program
+        int program = glCreateProgram();
+        glAttachShader(program, vertexShader);
+        glAttachShader(program, fragmentShader);
+        glLinkProgram(program);
+
+        // Check for linking errors
+        if (glGetProgrami(program, GL_LINK_STATUS) == GL_FALSE) {
+            String log = glGetProgramInfoLog(program);
+            throw new RuntimeException("Shader program linking failed: " + log);
+        }
+
+        // Cleanup shaders after linking
+        glDeleteShader(vertexShader);
+        glDeleteShader(fragmentShader);
+
+        return program;
+    }
+
+    private int loadShader(String filePath, int shaderType) throws IOException {
+        InputStream shaderStream = App.class.getResourceAsStream(filePath);
+        String shaderSource = new String(shaderStream.readAllBytes(), StandardCharsets.UTF_8);
+
+        // Create and compile the shader
+        int shader = glCreateShader(shaderType);
+        glShaderSource(shader, shaderSource);
+        glCompileShader(shader);
+
+        // Check for compilation errors
+        if (glGetShaderi(shader, GL_COMPILE_STATUS) == GL_FALSE) {
+            String log = glGetShaderInfoLog(shader);
+            throw new RuntimeException("Shader compilation failed for " + filePath + ": " + log);
+        }
+
+        return shader;
     }
 
     public static void main(String[] args) {
